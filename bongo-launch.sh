@@ -19,7 +19,13 @@ BRIDGE_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 if [ -z "${CLICK_MODE:-}" ]; then
     if [ "${MOUSE_FIX:-1}" = "0" ]; then CLICK_MODE=off; else CLICK_MODE=always; fi
 fi
-: "${MOUSE_CLICKS:=0}"
+# MOUSE_CLICKS: real (default) / paw / off. Old configs used 1 and 0.
+case "${MOUSE_CLICKS:-real}" in
+    1) MOUSE_CLICKS=paw ;;
+    0) MOUSE_CLICKS=off ;;
+    real|paw|off) ;;
+    *) MOUSE_CLICKS=real ;;
+esac
 : "${BRIDGE_PORT:=47811}"
 
 notify() {
@@ -68,6 +74,7 @@ if [ "$KEY_BRIDGE" = "1" ] || [ "$CLICK_MODE" = "always" ]; then
         export BONGO_BRIDGE_PORT="$BRIDGE_PORT"
         export BONGO_KEY_BRIDGE="$KEY_BRIDGE"
         [ "$CLICK_MODE" = "always" ] && export BONGO_FORCE_CLICKABLE=1 || export BONGO_FORCE_CLICKABLE=0
+        [ "$MOUSE_CLICKS" = "real" ] && export BONGO_REAL_MOUSE=1 || export BONGO_REAL_MOUSE=0
         # Proton starts this .exe inside Bongo Cat's prefix, next to the game,
         # and stops it again when the game closes.
         export PROTON_REMOTE_DEBUG_CMD="\"$BRIDGE_DIR/keybridge.exe\""
@@ -78,8 +85,7 @@ fi
 
 if [ "$KEY_BRIDGE" = "1" ]; then
     if command -v python3 >/dev/null 2>&1; then
-        reader_args=(--port "$BRIDGE_PORT" --parent-pid "$$")
-        [ "$MOUSE_CLICKS" = "1" ] && reader_args+=(--mouse)
+        reader_args=(--port "$BRIDGE_PORT" --parent-pid "$$" --mouse-mode "$MOUSE_CLICKS")
         helper "$BRIDGE_DIR/keyreader.py" "${reader_args[@]}" >"$BRIDGE_DIR/keyreader.log" 2>&1 &
         READER_PID=$!
     else

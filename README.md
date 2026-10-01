@@ -68,7 +68,7 @@ Only needed if the installer said so. The `input` group only takes effect in a n
 python3 ~/.local/share/bongo-bridge/keyreader.py --test
 ```
 
-Type a few letters. You should see `tap down left paw` and `tap down right paw`. Press **Ctrl+C** to stop.
+Type a few letters. You should see `tap  left paw` and `tap  right paw`, one line per key. Press **Ctrl+C** to stop.
 
 If it says *permission denied*, go back to Step 3.
 
@@ -134,7 +134,7 @@ Open `~/.local/share/bongo-bridge/config.env` in a text editor, change a value, 
 | Setting | Values | What it does |
 |---|---|---|
 | `KEY_BRIDGE` | `1` / `0` | Cat reacts while you type in other apps |
-| `MOUSE_CLICKS` | `0` / `1` | Mouse clicks also count as taps |
+| `MOUSE_CLICKS` | `real` (default), `paw`, `off` | `real` replays your clicks as actual mouse clicks anywhere on the desktop. `paw` taps a paw instead. |
 | `CLICK_MODE` | `always` (default), `hover`, `off` | `always` makes the cat always clickable. `hover` only makes it clickable while the mouse is over it and respects Gaming Mode, but doesn't work during Bongo Cat's first-time setup. |
 | `TRANSPARENCY_MODE` | `off` | Only for GE-Proton experiments; leave it `off` |
 | `BRIDGE_PORT` | `47811` | Only change it if a log says the port is in use |
@@ -153,6 +153,8 @@ Logs are in `~/.local/share/bongo-bridge/`: `keyreader.log`, `keybridge.log` and
 | Cat can't be clicked | The Transparency Fix must be on, so press **F3**. `keybridge.log` should then say *click fix: made window ... clickable*. |
 | Cat vanished | You answered Yes in the setup, or pressed F3 twice. Close the game and restore `3419430-good` (Step 9), or delete `compatdata/3419430` and redo Steps 7–8. |
 | Cat invisible for another reason | Press **F8** right after launching. Once the cat is focused, **F1** resets its position. |
+| Mashing many keys only counts a few taps | Update to the current version: older ones sent every key as one of two letters, which Bongo Cat could only count twice. |
+| Mouse clicks elsewhere don't count | Set `MOUSE_CLICKS=real` in `config.env`. |
 | Cat doesn't react to typing elsewhere | If `keyreader.log` says *permission denied*, redo Steps 2–3. If `keybridge.log` doesn't exist, the launch options aren't set. |
 | Something acts strange in a menu | Restart Bongo Cat. |
 | "steamwebhelper is not responding" | That's Steam itself. Choose **Restart Steam**. |
@@ -167,9 +169,11 @@ Why not GE-Proton? GE-Proton 11-6 has its own transparency patch, but with it Bo
 
 **Typing.** On Linux, Wine only receives keys while one of its own windows is focused, so Bongo Cat can't hear you type in other apps.
 
-- `keyreader.py` reads your keyboard from `/dev/input`. It only forwards which half of the keyboard you hit (left → F, right → J, space alternates, mouse → K) to `127.0.0.1`.
+- `keyreader.py` reads your keyboard from `/dev/input`. It only forwards which half of the keyboard you hit, never the key itself: every key that is down gets its own letter from that side's pool of 26, handed out in turn, so the letter says nothing about what you pressed.
+- Giving each key its own letter is what makes mashing work. Bongo Cat counts a tap per key, so if everything mapped to one letter per side, 30 keys at once would only ever count as 2 taps.
 - Proton starts `keybridge.exe` inside Bongo Cat's prefix, using Proton's `PROTON_REMOTE_DEBUG_CMD` hook, and stops it when the game closes.
-- `keybridge.exe` replays each tap with `SendInput()`.
+- `keybridge.exe` replays each tap with `SendInput()` as a full press, short hold, release. The hold matters: a game that checks key state once a frame would miss a press and release that happen in the same instant.
+- Mouse clicks are replayed as real clicks. While an injected click is in flight, Bongo Cat's window is briefly set to pass clicks through, so the click reaches its global mouse hook but can't press any of its buttons. Clicking the cat on purpose still works normally.
 - While you type directly into Bongo Cat's own window, forwarding pauses so presses aren't counted twice.
 
 **Clicking.** Bongo Cat marks its window as click-through and only lifts that while it sees the mouse over the cat. On Wayland it can't see the mouse over normal Linux apps, so the cat stays unclickable.
@@ -210,14 +214,14 @@ The manual equivalent is:
 x86_64-w64-mingw32-gcc -O2 -s -mwindows -o keybridge.exe keybridge.c -lws2_32
 ```
 
-The included binary's SHA-256 is `4e2eb1ad3f7e39969f99188720408f7f7e0d6c184c1651ed1e7e2d44dbfb6ca9`. Your own build may differ byte-for-byte if you use a different compiler version.
+The included binary's SHA-256 is `2c67979ce20824a415d2ff2cf5d20f5183c0842d6e557b9a51ba5ab83d75c4ef`. Your own build may differ byte-for-byte if you use a different compiler version.
 
 ---
 
 ## Privacy and safety
 
-- Your actual keys never leave `keyreader.py`. Only left, right and mouse taps are sent, and only to your own machine.
-- `keybridge.exe` only ever presses the letters A–Z.
+- Your actual keys never leave `keyreader.py`. It sends only which side of the keyboard you hit, as the next free letter from that side's pool, and only to your own machine. The letter carries no trace of the key you pressed.
+- `keybridge.exe` only ever presses the letters A–Z and the left mouse button. No modifiers, no function keys, no shortcuts.
 - The click fix only changes the click-through flag of windows that use Bongo Cat's Transparency Fix.
 - Being in the `input` group lets any program running as you read keyboard input. Tools like Input Remapper need the same access. To leave the group again, run `sudo gpasswd -d $USER input` and log out.
 - In `CLICK_MODE=always`, Bongo Cat's Gaming Mode can no longer block clicks on the cat. Use `hover` if you rely on Gaming Mode.
