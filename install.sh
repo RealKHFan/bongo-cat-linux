@@ -26,6 +26,16 @@ install -m 755 "$SRC/bongo-launch.sh" "$SRC/keyreader.py" "$SRC/mousecatcher.py"
 install -m 644 "$SRC/keybridge.exe" "$SRC/keybridge.c" "$SRC/README.md" "$DEST/"
 if [ -f "$DEST/config.env" ]; then
     ok "kept your existing config.env"
+    # MOUSE_CLICKS used to be 0/1 and defaulted to 0, which switched mouse
+    # clicks off entirely. Move old settings onto the new wording.
+    if grep -q '^MOUSE_CLICKS=[01]$' "$DEST/config.env"; then
+        sed -i 's/^MOUSE_CLICKS=[01]$/MOUSE_CLICKS=real/' "$DEST/config.env"
+        ok "mouse clicks switched on (MOUSE_CLICKS=real)"
+    elif ! grep -q '^MOUSE_CLICKS=' "$DEST/config.env"; then
+        printf '\n# What your mouse clicks do: real / paw / off\nMOUSE_CLICKS=real\n' \
+            >> "$DEST/config.env"
+        ok "added the MOUSE_CLICKS setting to your config.env"
+    fi
     if ! grep -q '^CLICK_MODE=' "$DEST/config.env"; then
         cat >> "$DEST/config.env" <<'CFG'
 

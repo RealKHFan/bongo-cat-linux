@@ -3,18 +3,20 @@
 keyreader.py - Bongo Cat key bridge, Linux side.
 
 Reads key presses straight from /dev/input (your user must be in the 'input'
-group), turns each press into an anonymous "left paw" / "right paw" tap and
-sends it to keybridge.exe, which runs inside Bongo Cat's Proton prefix and
-replays it so Bongo Cat reacts while you type in other apps.
+group), turns each press into an anonymous paw tap and sends it to
+keybridge.exe, which runs inside Bongo Cat's Proton prefix and replays it so
+Bongo Cat reacts while you type in other apps.
 
-Only WHICH HALF of the keyboard you hit is forwarded, never the actual key:
-left half -> F, right half -> J, space alternates, mouse clicks -> K.
+Only WHICH HALF of the keyboard you hit is forwarded, never the actual key.
+Each key that is down gets its own letter from that side's pool, so pressing
+30 keys at once counts as 30 taps instead of 2.
 
 No extra Python packages needed (pure standard library).
 
     python3 keyreader.py --test      # show detected keyboards + live taps, no Bongo Cat needed
 """
 import argparse
+import collections
 import errno
 import os
 import select
@@ -46,7 +48,16 @@ LEFT_KEYS = {
     59, 60, 61, 62, 63, 64,  # F1..F6
 }
 
-LETTER_LEFT, LETTER_RIGHT, LETTER_MOUSE = "F", "J", "K"
+# Letters each side of the keyboard taps with. Between them they use A-Z once
+# each, so up to 26 keys can be down at the same time and still be counted
+# separately. The letter is just the next free one in the pool - it carries no
+# information about which key you actually pressed.
+LEFT_POOL = "QWERTASDFGZXCV"
+RIGHT_POOL = "YUIOPHJKLBNM"
+
+# Marks a held mouse button internally. Deliberately not a single letter, so
+# it can't be confused with the tap slot "M", which is a normal right-hand key.
+MOUSE_TOKEN = "mouse"
 
 
 def log(msg):
@@ -107,37 +118,82 @@ def find_devices(want_mouse, proc_path="/proc/bus/input/devices"):
 # ---------------------------------------------------------------- tap logic
 
 class Paws:
-    """Turns physical presses into letter down/up bytes; every press is a fresh tap."""
+    """Turns physical presses into anonymous tap bytes.
 
-    def __init__(self, send):
+    Every key that is down at the same time gets its OWN letter out of the
+    pool for its side of the keyboard. That matters: Bongo Cat counts a tap
+    per key, so if everything mapped to one letter per side (as this used to
+    do), mashing 30 keys at once would only ever count as 2 taps.
+
+    Which letter you get says nothing about which key you pressed - it is
+    just the next free one in the pool - so only the side of the keyboard
+    ever leaves this machine.
+    """
+
+    def __init__(self, send, mouse_mode="paw"):
         self.send = send
-        self.held = {LETTER_LEFT: 0, LETTER_RIGHT: 0, LETTER_MOUSE: 0}
-        self.active = {}          # (device, code) -> letter it was mapped to
+        self.mouse_mode = mouse_mode          # "off" | "paw" | "real"
+        self.free = {"L": collections.deque(LEFT_POOL),
+                     "R": collections.deque(RIGHT_POOL)}
+        self.active = {}                      # (device, code) -> letter, or "M"
+        self.held = {}                        # letter -> how many keys share it
         self.space_toggle = False
+        self.mouse_toggle = False
 
-    def letter_for(self, kind, code):
-        if kind == "mouse" or BTN_LEFT <= code <= BTN_TASK:
-            return LETTER_MOUSE
-        if code == KEY_SPACE:
+    @staticmethod
+    def side_of(letter):
+        return "L" if letter in LEFT_POOL else "R"
+
+    def side_for(self, code):
+        if code == KEY_SPACE:                 # space alternates, like real bongoing
             self.space_toggle = not self.space_toggle
-            return LETTER_LEFT if self.space_toggle else LETTER_RIGHT
-        return LETTER_LEFT if code in LEFT_KEYS else LETTER_RIGHT
+            return "L" if self.space_toggle else "R"
+        return "L" if code in LEFT_KEYS else "R"
+
+    def take(self, side):
+        """Next free letter: own side first, then the other side, then share."""
+        for s in (side, "R" if side == "L" else "L"):
+            if self.free[s]:
+                return self.free[s].popleft()
+        # 27+ keys held down at once: share a letter rather than drop the tap
+        return (LEFT_POOL if side == "L" else RIGHT_POOL)[0]
 
     def press(self, dev, kind, code):
-        if (dev, code) in self.active:
+        key = (dev, code)
+        if key in self.active:
             return
-        letter = self.letter_for(kind, code)
-        self.active[(dev, code)] = letter
-        self.held[letter] += 1
-        self.send(letter.upper())   # keybridge re-taps if the letter is already down
+        is_mouse = kind == "mouse" or BTN_LEFT <= code <= BTN_TASK
+        if is_mouse:
+            if self.mouse_mode == "off":
+                return
+            if self.mouse_mode == "real":
+                self.active[key] = MOUSE_TOKEN
+                self.held[MOUSE_TOKEN] = self.held.get(MOUSE_TOKEN, 0) + 1
+                self.send("1")
+                return
+            # "paw": a click taps a paw, alternating sides
+            self.mouse_toggle = not self.mouse_toggle
+            side = "L" if self.mouse_toggle else "R"
+        else:
+            side = self.side_for(code)
+        letter = self.take(side)
+        self.active[key] = letter
+        self.held[letter] = self.held.get(letter, 0) + 1
+        self.send(letter)                     # uppercase = tap
 
     def release(self, dev, code):
         letter = self.active.pop((dev, code), None)
         if letter is None:
             return
-        self.held[letter] -= 1
-        if self.held[letter] == 0:
-            self.send(letter.lower())
+        self.held[letter] = self.held.get(letter, 1) - 1
+        if self.held[letter] > 0:
+            return
+        del self.held[letter]
+        if letter == MOUSE_TOKEN:
+            self.send("0")
+            return
+        self.send(letter.lower())
+        self.free[self.side_of(letter)].append(letter)   # back of the queue, so it rests a while
 
     def drop_device(self, dev):
         for key in [k for k in self.active if k[0] == dev]:
@@ -145,8 +201,9 @@ class Paws:
 
     def reset(self):
         self.active.clear()
-        for letter in self.held:
-            self.held[letter] = 0
+        self.held.clear()
+        self.free = {"L": collections.deque(LEFT_POOL),
+                     "R": collections.deque(RIGHT_POOL)}
 
 
 # ---------------------------------------------------------------- connection
@@ -179,8 +236,10 @@ class Link:
 
     def send(self, ch):
         if self.test:
-            arrow = "down" if ch.isupper() else "up  "
-            log("tap %s %s" % (arrow, {"F": "left paw", "J": "right paw", "K": "mouse"}[ch.upper()]))
+            if ch.isupper():
+                what = "mouse click" if ch == "M" else (
+                    "left paw " if ch in LEFT_POOL else "right paw") + "  (slot %s)" % ch
+                log("tap  %s" % what)
             return
         if not self.sock:
             return
@@ -204,10 +263,19 @@ class Link:
 def main():
     ap = argparse.ArgumentParser(description="Forward typing to Bongo Cat running under Proton.")
     ap.add_argument("--port", type=int, default=int(os.environ.get("BRIDGE_PORT", 47811)))
-    ap.add_argument("--mouse", action="store_true", help="count mouse clicks as taps too")
+    ap.add_argument("--mouse-mode", choices=("off", "paw", "real"),
+                    default=os.environ.get("BONGO_MOUSE_MODE", "paw"),
+                    help="off = ignore clicks, paw = a click taps a paw, "
+                         "real = replay it as an actual mouse click")
+    ap.add_argument("--mouse", action="store_true",
+                    help=argparse.SUPPRESS)      # old spelling of --mouse-mode paw
     ap.add_argument("--parent-pid", type=int, default=0, help="exit when this process exits")
     ap.add_argument("--test", action="store_true", help="print taps instead of sending them")
     args = ap.parse_args()
+    mouse_mode = args.mouse_mode
+    if args.mouse and mouse_mode == "off":
+        mouse_mode = "paw"
+    want_mouse = mouse_mode != "off"
 
     running = True
 
@@ -218,14 +286,14 @@ def main():
     signal.signal(signal.SIGINT, stop)
 
     link = Link(args.port, args.test)
-    paws = Paws(link.send)
+    paws = Paws(link.send, mouse_mode)
     link.on_reset = paws.reset
 
     fds = {}            # fd -> (path, kind)
     last_scan = 0.0
     warned = False
 
-    log("keyreader started (port %d, mouse=%s, test=%s)" % (args.port, args.mouse, args.test))
+    log("keyreader started (port %d, mouse=%s, test=%s)" % (args.port, mouse_mode, args.test))
 
     while running:
         now = time.monotonic()
@@ -237,7 +305,7 @@ def main():
         # (re)scan for keyboards every 3 s - handles hot-plugging
         if now - last_scan > 3.0:
             last_scan = now
-            wanted = find_devices(args.mouse)
+            wanted = find_devices(want_mouse)
             open_paths = {p for p, _ in fds.values()}
             denied = []
             for path, (kind, name) in wanted.items():
