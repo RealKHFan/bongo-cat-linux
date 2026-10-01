@@ -17,12 +17,13 @@ ask()  { local a; read -rp "   $1 [Y/n] " a; [[ ! "$a" =~ ^[Nn] ]]; }
 
 # ---------------------------------------------------------------------------
 step 1/4 "Copying the bridge to $DEST"
-for f in bongo-launch.sh keyreader.py mousecatcher.py keybridge.c config.env uninstall.sh build-helper.sh README.md; do
+for f in bongo-launch.sh keyreader.py mousecatcher.py keep-cat-on-top.py keybridge.c config.env uninstall.sh build-helper.sh README.md; do
     [ -f "$SRC/$f" ] || die "Missing $f. Download the whole repository and run install.sh from inside that folder."
 done
 [ -f "$SRC/keybridge.exe" ] || die "Missing keybridge.exe. Build it first with:  bash build-helper.sh"
 mkdir -p "$DEST"
-install -m 755 "$SRC/bongo-launch.sh" "$SRC/keyreader.py" "$SRC/mousecatcher.py" "$SRC/uninstall.sh" "$SRC/build-helper.sh" "$DEST/"
+install -m 755 "$SRC/bongo-launch.sh" "$SRC/keyreader.py" "$SRC/mousecatcher.py" \
+        "$SRC/keep-cat-on-top.py" "$SRC/uninstall.sh" "$SRC/build-helper.sh" "$DEST/"
 install -m 644 "$SRC/keybridge.exe" "$SRC/keybridge.c" "$SRC/README.md" "$DEST/"
 if [ -f "$DEST/config.env" ]; then
     ok "kept your existing config.env"
@@ -134,4 +135,7 @@ fi
 echo "   $n. Bongo Cat > Properties > Compatibility > force Proton Experimental."; n=$((n+1))
 echo "   $n. Paste the launch options above (skip if they're already set)."; n=$((n+1))
 echo "   $n. Launch Bongo Cat and press F3 as soon as the cat appears (see README.md)."
+echo
+echo "   On KDE, if the cat keeps hiding behind other windows:"
+echo "     python3 $DEST/keep-cat-on-top.py"
 echo

@@ -119,6 +119,31 @@ If the cat ever disappears, delete `3419430` and rename `3419430-good` back to `
 
 ---
 
+## Keeping the cat on top (KDE)
+
+If the cat keeps disappearing behind other windows, Wine's "always on top" isn't enough: plenty of other windows claim the same thing, and the panel outranks it anyway. KWin can put the cat in a higher stacking layer, which settles it.
+
+```
+python3 ~/.local/share/bongo-bridge/keep-cat-on-top.py
+```
+
+That adds a single KWin window rule for Bongo Cat and reloads KWin. Your existing window rules are backed up first and left alone.
+
+| Command | What it does |
+|---|---|
+| `keep-cat-on-top.py` | above every ordinary window and the panel |
+| `keep-cat-on-top.py --fullscreen` | above fullscreen windows too |
+| `keep-cat-on-top.py --remove` | undo it |
+| `keep-cat-on-top.py --dry-run` | show the change without saving |
+
+To do it by hand instead: System Settings → Window Management → Window Rules → **Add New...**, set Window class to **Exact Match** and `steam_app_3419430`, then **Add Property... → Layer** and set it to **Force** + **Notification**.
+
+If **Layer** isn't in the property list, your Plasma is older than 6. Use **Keep above → Force → Yes** instead; it's weaker, but it's what's available.
+
+Thanks to **Euroson** on the Steam guide for working out that the stacking layer is the thing to change.
+
+---
+
 ## Updating
 
 1. Close Bongo Cat.
@@ -153,6 +178,7 @@ Logs are in `~/.local/share/bongo-bridge/`: `keyreader.log`, `keybridge.log` and
 | Cat can't be clicked | The Transparency Fix must be on, so press **F3**. `keybridge.log` should then say *click fix: made window ... clickable*. |
 | Cat vanished | You answered Yes in the setup, or pressed F3 twice. Close the game and restore `3419430-good` (Step 9), or delete `compatdata/3419430` and redo Steps 7–8. |
 | Cat invisible for another reason | Press **F8** right after launching. Once the cat is focused, **F1** resets its position. |
+| Cat hides behind other windows or the panel | Run `keep-cat-on-top.py` (see above). |
 | Mashing many keys only counts a few taps | Update to the current version: older ones sent every key as one of two letters, which Bongo Cat could only count twice. |
 | Mouse clicks elsewhere don't count | Set `MOUSE_CLICKS=real` in `config.env`. |
 | Cat doesn't react to typing elsewhere | If `keyreader.log` says *permission denied*, redo Steps 2–3. If `keybridge.log` doesn't exist, the launch options aren't set. |
@@ -195,6 +221,7 @@ With the Transparency Fix on, the see-through area is already a real hole in the
 | `keybridge.c` | Source of the Windows side: key replay + click fix |
 | `keybridge.exe` | `keybridge.c`, compiled |
 | `mousecatcher.py` | Optional hover-mode helper (uses the system's libX11/libXext) |
+| `keep-cat-on-top.py` | Optional: one KWin rule so the cat stays above other windows (KDE) |
 | `build-helper.sh` | Rebuilds `keybridge.exe` from source |
 | `uninstall.sh` | Removes the installed files |
 
