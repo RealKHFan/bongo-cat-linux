@@ -4,7 +4,7 @@
 # Put this in Bongo Cat's Steam launch options (install.sh prints the exact line):
 #     /home/YOURNAME/.local/share/bongo-bridge/bongo-launch.sh %command%
 #
-# It starts helpers, then the game:
+# It fixes Bongo Cat's saved Transparency Fix setting, starts helpers, then the game:
 #   - the key bridge, so Bongo Cat reacts while you type in other apps
 #   - the click fix, so the cat can be clicked on Wayland
 # (plus GE-Proton's transparency switch, only if you enable it in config.env).
@@ -19,12 +19,19 @@ BRIDGE_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 if [ -z "${CLICK_MODE:-}" ]; then
     if [ "${MOUSE_FIX:-1}" = "0" ]; then CLICK_MODE=off; else CLICK_MODE=always; fi
 fi
-# MOUSE_CLICKS: real (default) / paw / off. Old configs used 1 and 0.
-case "${MOUSE_CLICKS:-real}" in
+# MOUSE_CLICKS: paw (default) / real / off. Old configs used 1 and 0.
+: "${MOUSE_CLICKS:=paw}"
+case "$MOUSE_CLICKS" in
     1) MOUSE_CLICKS=paw ;;
     0) MOUSE_CLICKS=off ;;
     real|paw|off) ;;
-    *) MOUSE_CLICKS=real ;;
+    *) MOUSE_CLICKS=paw ;;
+esac
+# TRANSPARENCY_FIX: on (default) / keep / off - see prelaunch.py
+: "${TRANSPARENCY_FIX:=on}"
+case "$TRANSPARENCY_FIX" in
+    on|keep|off) ;;
+    *) TRANSPARENCY_FIX=on ;;
 esac
 : "${BRIDGE_PORT:=47811}"
 
@@ -100,7 +107,16 @@ if [ "$CLICK_MODE" = "hover" ] && [ -f "$BRIDGE_DIR/mousecatcher.py" ]; then
     CATCHER_PID=$!
 fi
 
-# --- 4. Run the game -----------------------------------------------------------
+# --- 4. Undo Bongo Cat's "unclean quit" reset ---------------------------------
+# Steam's Stop button counts as a crash, and since the November 2026 update the
+# game answers that by switching its Transparency Fix off on the next start.
+# prelaunch.py edits the saved settings back before the game reads them.
+if [ "$TRANSPARENCY_FIX" != "off" ] && [ -f "$BRIDGE_DIR/prelaunch.py" ]; then
+    BONGO_TRANSPARENCY_FIX="$TRANSPARENCY_FIX" helper "$BRIDGE_DIR/prelaunch.py" \
+        >"$BRIDGE_DIR/prelaunch.log" 2>&1
+fi
+
+# --- 5. Run the game -----------------------------------------------------------
 "$@"
 rc=$?
 

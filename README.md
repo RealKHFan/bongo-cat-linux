@@ -94,12 +94,14 @@ As soon as you see the cat, press **F3** once. That turns on Bongo Cat's Transpa
 
 If nothing happens, Alt+Tab to Bongo Cat (or click its taskbar entry) and press F3 again.
 
+You only need F3 this once. From the second start on, the launcher switches the Transparency Fix on for you before every launch (see [Why the launcher edits Bongo Cat's settings](#why-the-launcher-edits-bongo-cats-settings)).
+
 ### Step 8: Go through Bongo Cat's setup
 
 Click through the setup screens. When it asks **whether your window is transparent, answer No**.
 
 - Answering **Yes** switches Bongo Cat to a mode Proton can't display, and the cat vanishes on the next start.
-- Pressing **F3 a second time** also makes the cat disappear.
+- Pressing **F3 a second time** switches the fix off and the cat disappears. Just close and relaunch Bongo Cat: the launcher switches it back on.
 
 ### Step 9: Check, then back up
 
@@ -159,8 +161,9 @@ Open `~/.local/share/bongo-bridge/config.env` in a text editor, change a value, 
 | Setting | Values | What it does |
 |---|---|---|
 | `KEY_BRIDGE` | `1` / `0` | Cat reacts while you type in other apps |
-| `MOUSE_CLICKS` | `real` (default), `paw`, `off` | `real` replays your clicks as actual mouse clicks anywhere on the desktop. `paw` taps a paw instead. |
+| `MOUSE_CLICKS` | `paw` (default), `real`, `off` | `paw`: every click in another app taps a paw, so it counts on the counter. `real` replays it as an actual click, which is **not recommended**: Bongo Cat then also presses whatever button was last under your mouse on the cat, such as a chest. |
 | `CLICK_MODE` | `always` (default), `hover`, `off` | `always` makes the cat always clickable. `hover` only makes it clickable while the mouse is over it and respects Gaming Mode, but doesn't work during Bongo Cat's first-time setup. |
+| `TRANSPARENCY_FIX` | `on` (default), `keep`, `off` | `on` switches Bongo Cat's Transparency Fix on before every start. `keep` only stops the game from resetting it after Steam's Stop. `off` leaves the game's settings alone. |
 | `TRANSPARENCY_MODE` | `off` | Only for GE-Proton experiments; leave it `off` |
 | `BRIDGE_PORT` | `47811` | Only change it if a log says the port is in use |
 
@@ -168,19 +171,28 @@ Open `~/.local/share/bongo-bridge/config.env` in a text editor, change a value, 
 
 ## Troubleshooting
 
-Logs are in `~/.local/share/bongo-bridge/`: `keyreader.log`, `keybridge.log` and, in hover mode, `mousecatcher.log`.
+Logs are in `~/.local/share/bongo-bridge/`: `keyreader.log`, `keybridge.log`, `prelaunch.log` and, in hover mode, `mousecatcher.log`.
+
+**Reporting a problem?** Run this and attach the file it saves to your Desktop. It only reads files, and blanks out your user name and Steam ID:
+
+```
+python3 ~/.local/share/bongo-bridge/bongo-diagnose.py
+```
 
 | Problem | Fix |
 |---|---|
 | Game closes right away | The launch options path is wrong. Paste it again from `LAUNCH-OPTIONS.txt`; it must start with `/`. |
 | "Already running" on the first launch | Press **Stop** and launch again. |
-| Black background | Alt+Tab to Bongo Cat and press **F3**. |
+| Black box, invisible cat or unclickable cat since the November 2026 update | Update this bridge (re-run `bash install.sh`). The update made Bongo Cat switch its Transparency Fix off after every Steam Stop; the launcher now switches it back on. |
+| Black background | Close and relaunch Bongo Cat. If it's still black, check `prelaunch.log`, then Alt+Tab to Bongo Cat and press **F3** once. |
 | Cat can't be clicked | The Transparency Fix must be on, so press **F3**. `keybridge.log` should then say *click fix: made window ... clickable*. |
-| Cat vanished | You answered Yes in the setup, or pressed F3 twice. Close the game and restore `3419430-good` (Step 9), or delete `compatdata/3419430` and redo Steps 7–8. |
+| Cat vanished | Close and relaunch Bongo Cat first: the launcher switches the Transparency Fix back on. If it's still gone, restore `3419430-good` (Step 9), or delete `compatdata/3419430` and redo Steps 7–8. |
 | Cat invisible for another reason | Press **F8** right after launching. Once the cat is focused, **F1** resets its position. |
 | Cat hides behind other windows or the panel | Run `keep-cat-on-top.py` (see above). |
 | Mashing many keys only counts a few taps | Update to the current version: older ones sent every key as one of two letters, which Bongo Cat could only count twice. |
-| Mouse clicks elsewhere don't count | Set `MOUSE_CLICKS=real` in `config.env`. |
+| Mouse clicks elsewhere don't count | Set `MOUSE_CLICKS=paw` in `config.env`. |
+| Chests open by themselves, or menu buttons get pressed | You're on `MOUSE_CLICKS=real`. Set it to `paw`. |
+| Clicking the cat sometimes does nothing | Update the bridge (the click fix now reacts within 5 ms instead of 50). If it still happens, `keybridge.log` shows how often Bongo Cat turns click-through back on. |
 | Cat doesn't react to typing elsewhere | If `keyreader.log` says *permission denied*, redo Steps 2–3. If `keybridge.log` doesn't exist, the launch options aren't set. |
 | Something acts strange in a menu | Restart Bongo Cat. |
 | "steamwebhelper is not responding" | That's Steam itself. Choose **Restart Steam**. |
@@ -199,7 +211,8 @@ Why not GE-Proton? GE-Proton 11-6 has its own transparency patch, but with it Bo
 - Giving each key its own letter is what makes mashing work. Bongo Cat counts a tap per key, so if everything mapped to one letter per side, 30 keys at once would only ever count as 2 taps.
 - Proton starts `keybridge.exe` inside Bongo Cat's prefix, using Proton's `PROTON_REMOTE_DEBUG_CMD` hook, and stops it when the game closes.
 - `keybridge.exe` replays each tap with `SendInput()` as a full press, short hold, release. The hold matters: a game that checks key state once a frame would miss a press and release that happen in the same instant.
-- Mouse clicks are replayed as real clicks. While an injected click is in flight, Bongo Cat's window is briefly set to pass clicks through, so the click reaches its global mouse hook but can't press any of its buttons. Clicking the cat on purpose still works normally.
+- Mouse clicks in other apps become paw taps, and count on the counter just like a click. They are held back for 60 ms first: if you clicked the cat itself, Wine sees that click directly and the paw tap is dropped, so nothing counts twice.
+- Why not replay real clicks? Bongo Cat is a Unity game that reads raw mouse input. A replayed click reaches its interface at Wine's last known cursor position, which is wherever your mouse last was over the cat, no matter where your real mouse is. In practice that kept opening the left chest. Hiding the window from the click doesn't help, because Unity checks the position itself. `MOUSE_CLICKS=real` is still there for anyone who wants it.
 - While you type directly into Bongo Cat's own window, forwarding pauses so presses aren't counted twice.
 
 **Clicking.** Bongo Cat marks its window as click-through and only lifts that while it sees the mouse over the cat. On Wayland it can't see the mouse over normal Linux apps, so the cat stays unclickable.
@@ -207,6 +220,18 @@ Why not GE-Proton? GE-Proton 11-6 has its own transparency patch, but with it Bo
 With the Transparency Fix on, the see-through area is already a real hole in the window. So `keybridge.exe` simply removes the click-through mark. Clicks on the cat reach Bongo Cat, and clicks on the see-through area pass through to whatever is behind it.
 
 `CLICK_MODE=hover` instead runs `mousecatcher.py`. It places an invisible window on the cat's outline so Bongo Cat can notice the mouse itself, which keeps Gaming Mode working.
+
+### Why the launcher edits Bongo Cat's settings
+
+Since its November 2026 update, Bongo Cat checks at startup whether it was closed properly last time, and if not, it switches its Transparency Fix off. Its own log says so on every start:
+
+```
+TransparentWindow | Previous session did not quit cleanly. Resetting the transparency fix to its default.
+```
+
+On Linux you close the game with Steam's **Stop** button, which always counts as an unclean quit, so every start came up with a black box, an invisible cat, or a cat that can't be clicked.
+
+Before each start, `prelaunch.py` changes exactly two values in Bongo Cat's saved settings (the registry file `user.reg` in its Proton prefix): it marks the last session as closed properly and switches the Transparency Fix back on. It waits until Wine has fully shut down, so the change can't be overwritten, and keeps a one-time backup at `user.reg.before-bongo-bridge`. Set `TRANSPARENCY_FIX=off` in `config.env` to switch this off.
 
 ---
 
@@ -222,6 +247,8 @@ With the Transparency Fix on, the see-through area is already a real hole in the
 | `keybridge.exe` | `keybridge.c`, compiled |
 | `mousecatcher.py` | Optional hover-mode helper (uses the system's libX11/libXext) |
 | `keep-cat-on-top.py` | Optional: one KWin rule so the cat stays above other windows (KDE) |
+| `prelaunch.py` | Runs before every start: undoes Bongo Cat's "unclean quit" reset of its Transparency Fix |
+| `bongo-diagnose.py` | Collects logs and settings into one file for bug reports (read-only) |
 | `build-helper.sh` | Rebuilds `keybridge.exe` from source |
 | `uninstall.sh` | Removes the installed files |
 
@@ -241,7 +268,7 @@ The manual equivalent is:
 x86_64-w64-mingw32-gcc -O2 -s -mwindows -o keybridge.exe keybridge.c -lws2_32
 ```
 
-The included binary's SHA-256 is `2c67979ce20824a415d2ff2cf5d20f5183c0842d6e557b9a51ba5ab83d75c4ef`. Your own build may differ byte-for-byte if you use a different compiler version.
+The included binary's SHA-256 is `416d8eb39a06555d2a41c24b8f6eba6eef08845a817eca316003a9c663d91594`. Your own build may differ byte-for-byte if you use a different compiler version.
 
 ---
 
