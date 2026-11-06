@@ -138,7 +138,6 @@ class Paws:
         self.active = {}                      # (device, code) -> letter, or "M"
         self.held = {}                        # letter -> how many keys share it
         self.space_toggle = False
-        self.mouse_toggle = False
 
     @staticmethod
     def side_of(letter):
@@ -166,16 +165,14 @@ class Paws:
         if is_mouse:
             if self.mouse_mode == "off":
                 return
-            if self.mouse_mode == "real":
-                self.active[key] = MOUSE_TOKEN
-                self.held[MOUSE_TOKEN] = self.held.get(MOUSE_TOKEN, 0) + 1
-                self.send("1")
-                return
-            # "paw": a click taps a paw, alternating sides
-            self.mouse_toggle = not self.mouse_toggle
-            side = "L" if self.mouse_toggle else "R"
-        else:
-            side = self.side_for(code)
+            # "paw" (default): keybridge turns it into a paw tap, and cancels it
+            # if Wine saw the click itself because you clicked the cat.
+            # "real": replayed as an actual click (see config.env for the risk).
+            self.active[key] = MOUSE_TOKEN
+            self.held[MOUSE_TOKEN] = self.held.get(MOUSE_TOKEN, 0) + 1
+            self.send("1" if self.mouse_mode == "real" else "2")
+            return
+        side = self.side_for(code)
         letter = self.take(side)
         self.active[key] = letter
         self.held[letter] = self.held.get(letter, 0) + 1
@@ -236,8 +233,8 @@ class Link:
 
     def send(self, ch):
         if self.test:
-            if ch.isupper():
-                what = "mouse click" if ch == "M" else (
+            if ch.isupper() or ch in ("1", "2"):
+                what = {"1": "mouse click (real)", "2": "mouse click (paw tap)"}.get(ch) or (
                     "left paw " if ch in LEFT_POOL else "right paw") + "  (slot %s)" % ch
                 log("tap  %s" % what)
             return
@@ -264,7 +261,7 @@ def main():
     ap = argparse.ArgumentParser(description="Forward typing to Bongo Cat running under Proton.")
     ap.add_argument("--port", type=int, default=int(os.environ.get("BRIDGE_PORT", 47811)))
     ap.add_argument("--mouse-mode", choices=("off", "paw", "real"),
-                    default=os.environ.get("BONGO_MOUSE_MODE", "paw"),
+                    default=os.environ.get("BONGO_MOUSE_MODE") or "paw",
                     help="off = ignore clicks, paw = a click taps a paw, "
                          "real = replay it as an actual mouse click")
     ap.add_argument("--mouse", action="store_true",

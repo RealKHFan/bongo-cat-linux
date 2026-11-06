@@ -12,9 +12,17 @@
  *
  * Protocol (one byte per event):
  *   'A'..'Z'  tap this letter          'a'..'z'  that letter was let go
- *   '1'       mouse click tap          '0'       mouse button let go
+ *   '2'       a mouse click, replayed as a paw tap (default)
+ *   '1'       a mouse click, replayed as a real click ('real' mode only)
+ *   '0'       mouse button let go
  * Anything else is ignored, so nothing but plain letters and a plain left
  * click can ever be injected (no F-keys, no modifiers, no Alt+F4).
+ *
+ * Why clicks become paw taps by default: Bongo Cat is a Unity game reading raw
+ * mouse input, so a replayed click reaches its interface at Wine's last known
+ * cursor position - wherever your mouse last was over the cat, e.g. on a
+ * chest - no matter where your real mouse is. Paw taps count exactly the same
+ * on the counter and never touch the interface.
  *
  * Each tap is a real down -> hold -> up cycle with a minimum hold time, so a
  * game that samples key state once a frame still sees it, and taps queued on
@@ -49,6 +57,7 @@
 #define KEY_GRACE_MS      1500   /* pause keys after real typing into Wine */
 #define MOUSE_GRACE_MS     400   /* pause clicks after a real click in Wine */
 #define MOUSE_ARM_MS        60   /* let a real click land before replaying ours */
+#define FIX_LOG_MS       60000   /* how often to report click-fix activity */
 #define TICK_MS              5   /* worker thread resolution */
 #define HOLD_MS             55   /* how long an injected tap stays down */
 #define GAP_MS              35   /* gap before the same letter taps again (>2 frames) */
@@ -207,6 +216,12 @@ typedef struct {
 
 static Slot g_keys[26];
 static Slot g_mouse;
+
+/* clicks replayed as paw taps: held back MOUSE_ARM_MS so a real click on the
+   cat itself (which Wine sees directly) can cancel them - no double counting */
+static int g_mpaw_pending;
+static DWORD g_mpaw_armed;
+static BOOL g_mpaw_right;
 static LONG g_taps_done;
 
 static void queue_tap(Slot *s)
@@ -267,6 +282,10 @@ static void handle_byte(unsigned char c)
     EnterCriticalSection(&g_lock);
     if (c >= 'A' && c <= 'Z')      queue_tap(&g_keys[c - 'A']);
     else if (c == '1')             { if (g_real_mouse) queue_tap(&g_mouse); }
+    else if (c == '2' && g_mpaw_pending < MAX_QUEUED) {
+        if (g_mpaw_pending == 0) g_mpaw_armed = GetTickCount();
+        g_mpaw_pending++;
+    }
     /* lowercase letters and '0' are "let go" hints; the tap cycle already ends
        by itself, so there is nothing to do and nothing can stay stuck down. */
     LeaveCriticalSection(&g_lock);
@@ -276,6 +295,7 @@ static void handle_byte(unsigned char c)
 
 static int g_fixed_now;
 static HWND g_logged_hwnd;
+static HWND g_cat_hwnd;          /* Bongo Cat's colour-keyed window, once seen */
 
 static BOOL CALLBACK fix_window(HWND hwnd, LPARAM unused)
 {
@@ -296,6 +316,7 @@ static BOOL CALLBACK fix_window(HWND hwnd, LPARAM unused)
     if (!GetLayeredWindowAttributes(hwnd, &key, &alpha, &flags) || !(flags & LWA_COLORKEY))
         return TRUE;   /* only with Transparency Fix on - otherwise the whole window would block clicks */
 
+    g_cat_hwnd = hwnd;
     SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex & ~WS_EX_TRANSPARENT);
     g_fixed_now++;
     if (hwnd != g_logged_hwnd) {
@@ -306,42 +327,92 @@ static BOOL CALLBACK fix_window(HWND hwnd, LPARAM unused)
     return TRUE;
 }
 
+/* ---- Geometry log: where Wine thinks the screens and the cat are ---- */
+
+static BOOL CALLBACK log_monitor(HMONITOR mon, HDC dc, LPRECT r, LPARAM n)
+{
+    MONITORINFO mi;
+    (void)dc;
+    mi.cbSize = sizeof(mi);
+    if (GetMonitorInfoW(mon, &mi))
+        logmsg("screen %d: %ld,%ld  %ldx%ld%s", (int)(++*(int *)n), r->left, r->top,
+               r->right - r->left, r->bottom - r->top,
+               (mi.dwFlags & MONITORINFOF_PRIMARY) ? "  (primary)" : "");
+    return TRUE;
+}
+
+static void log_screens(void)
+{
+    int n = 0;
+    EnumDisplayMonitors(NULL, NULL, log_monitor, (LPARAM)&n);
+}
+
+static void log_cat_window(void)
+{
+    static RECT last;
+    RECT r;
+    if (!g_cat_hwnd || !IsWindow(g_cat_hwnd) || !GetWindowRect(g_cat_hwnd, &r)) return;
+    if (EqualRect(&r, &last)) return;
+    last = r;
+    logmsg("cat window: %ld,%ld  %ldx%ld", r.left, r.top, r.right - r.left, r.bottom - r.top);
+}
+
 /* ---- Worker: runs the tap slots and the click fix in one thread ---- */
 
 static DWORD WINAPI worker_thread(LPVOID unused)
 {
-    DWORD window_start = GetTickCount();
-    LONG window_fixes = 0;
+    DWORD fix_log_start = GetTickCount();
+    LONG fixes = 0;
     LONG last_logged_taps = 0;
     DWORD last_tap_log = GetTickCount();
-    BOOL warned = FALSE;
-    int ticks = 0;
+    DWORD last_geometry = 0;
     (void)unused;
+
+    log_screens();
 
     for (;;) {
         DWORD now = GetTickCount();
         int i;
 
         EnterCriticalSection(&g_lock);
+
+        /* mouse clicks as paw taps: after the arm delay, drop them if Wine saw
+           the click itself (you clicked the cat), otherwise tap a paw */
+        if (g_mpaw_pending > 0 && now - g_mpaw_armed >= MOUSE_ARM_MS) {
+            if (recently(&g_last_real_click, MOUSE_GRACE_MS)) {
+                g_mpaw_pending = 0;
+            } else {
+                g_mpaw_right = !g_mpaw_right;
+                queue_tap(&g_keys[(g_mpaw_right ? 'J' : 'F') - 'A']);
+                if (--g_mpaw_pending > 0) g_mpaw_armed = now;
+            }
+        }
+
         for (i = 0; i < 26; i++) pump_slot(&g_keys[i], now, i);
         if (g_real_mouse) pump_slot(&g_mouse, now, -1);
 
-        /* the click fix must not run while a click is shielded, or it would
-           undo the shield mid-click - same thread, so they can't overlap */
-        if (g_force_clickable && !g_mouse.down && ++ticks >= 10) {
-            ticks = 0;
+        /* Click fix, every tick: Bongo Cat switches its window back to
+           click-through whenever it thinks the mouse isn't over the cat, and
+           on Wayland it often can't see the mouse. Undoing that within 5 ms
+           (instead of 50) keeps the cat clickable almost all of the time.
+           Skipped while a 'real' click is shielded, so it can't undo the
+           shield mid-click - same thread, so the two can't overlap. */
+        if (g_force_clickable && !g_mouse.down) {
             g_fixed_now = 0;
             EnumWindows(fix_window, 0);
-            window_fixes += g_fixed_now;
-            if (now - window_start > 5000) {
-                if (window_fixes > 50 && !warned) {
-                    logmsg("click fix: Bongo Cat keeps turning click-through back on (%ld times in 5 s)",
-                           window_fixes);
-                    warned = TRUE;
-                }
-                window_start = now;
-                window_fixes = 0;
-            }
+            fixes += g_fixed_now;
+        }
+        if (now - fix_log_start >= FIX_LOG_MS) {
+            if (fixes > 0)
+                logmsg("click fix: Bongo Cat turned click-through back on %ld times in the last minute",
+                       fixes);
+            fix_log_start = now;
+            fixes = 0;
+        }
+
+        if (now - last_geometry >= 2000) {
+            last_geometry = now;
+            log_cat_window();
         }
 
         if (g_taps_done != last_logged_taps && now - last_tap_log > 60000) {
@@ -430,9 +501,9 @@ int WINAPI WinMain(HINSTANCE hinst, HINSTANCE prev, LPSTR cmd, int show)
     kb = getenv("BONGO_KEY_BRIDGE");
     key_bridge = !kb || kb[0] != '0';
 
-    logmsg("keybridge started (port %u, key bridge %s, click fix %s, real mouse clicks %s)",
+    logmsg("keybridge started (port %u, key bridge %s, click fix %s, mouse clicks as %s)",
            g_port, key_bridge ? "on" : "off", g_force_clickable ? "on" : "off",
-           g_real_mouse ? "on" : "off");
+           g_real_mouse ? "real clicks" : "paw taps");
 
     if (!SetWindowsHookExW(WH_KEYBOARD_LL, kb_hook, hinst, 0))
         logmsg("keyboard hook failed (%lu) - double-count guard off", GetLastError());

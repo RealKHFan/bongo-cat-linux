@@ -17,25 +17,46 @@ ask()  { local a; read -rp "   $1 [Y/n] " a; [[ ! "$a" =~ ^[Nn] ]]; }
 
 # ---------------------------------------------------------------------------
 step 1/4 "Copying the bridge to $DEST"
-for f in bongo-launch.sh keyreader.py mousecatcher.py keep-cat-on-top.py keybridge.c config.env uninstall.sh build-helper.sh README.md; do
+for f in bongo-launch.sh keyreader.py mousecatcher.py keep-cat-on-top.py prelaunch.py bongo-diagnose.py keybridge.c config.env uninstall.sh build-helper.sh README.md; do
     [ -f "$SRC/$f" ] || die "Missing $f. Download the whole repository and run install.sh from inside that folder."
 done
 [ -f "$SRC/keybridge.exe" ] || die "Missing keybridge.exe. Build it first with:  bash build-helper.sh"
 mkdir -p "$DEST"
 install -m 755 "$SRC/bongo-launch.sh" "$SRC/keyreader.py" "$SRC/mousecatcher.py" \
-        "$SRC/keep-cat-on-top.py" "$SRC/uninstall.sh" "$SRC/build-helper.sh" "$DEST/"
+        "$SRC/keep-cat-on-top.py" "$SRC/prelaunch.py" "$SRC/bongo-diagnose.py" \
+        "$SRC/uninstall.sh" "$SRC/build-helper.sh" "$DEST/"
 install -m 644 "$SRC/keybridge.exe" "$SRC/keybridge.c" "$SRC/README.md" "$DEST/"
 if [ -f "$DEST/config.env" ]; then
     ok "kept your existing config.env"
-    # MOUSE_CLICKS used to be 0/1 and defaulted to 0, which switched mouse
-    # clicks off entirely. Move old settings onto the new wording.
-    if grep -q '^MOUSE_CLICKS=[01]$' "$DEST/config.env"; then
-        sed -i 's/^MOUSE_CLICKS=[01]$/MOUSE_CLICKS=real/' "$DEST/config.env"
-        ok "mouse clicks switched on (MOUSE_CLICKS=real)"
-    elif ! grep -q '^MOUSE_CLICKS=' "$DEST/config.env"; then
-        printf '\n# What your mouse clicks do: real / paw / off\nMOUSE_CLICKS=real\n' \
+    # One-time updates for settings files older than format 3. Done once only,
+    # so a choice you make afterwards is never overwritten again.
+    if ! grep -q '^CONFIG_VERSION=[3-9]' "$DEST/config.env"; then
+        # "real" clicks were the default until Nov 2026, but Bongo Cat then also
+        # presses its own buttons (opening chests) - switch to paw taps.
+        if grep -q '^MOUSE_CLICKS=\(real\|1\)$' "$DEST/config.env"; then
+            sed -i 's/^MOUSE_CLICKS=\(real\|1\)$/MOUSE_CLICKS=paw/' "$DEST/config.env"
+            ok "mouse clicks now count as paw taps (replayed real clicks kept opening chests)"
+        elif grep -q '^MOUSE_CLICKS=0$' "$DEST/config.env"; then
+            sed -i 's/^MOUSE_CLICKS=0$/MOUSE_CLICKS=paw/' "$DEST/config.env"
+            ok "mouse clicks switched on as paw taps"
+        elif ! grep -q '^MOUSE_CLICKS=' "$DEST/config.env"; then
+            printf '\n# What your mouse clicks in other apps do: paw / real / off\nMOUSE_CLICKS=paw\n' \
+                >> "$DEST/config.env"
+        fi
+        printf '\n# Settings format version; install.sh uses it to update old settings once.\nCONFIG_VERSION=3\n' \
             >> "$DEST/config.env"
-        ok "added the MOUSE_CLICKS setting to your config.env"
+    fi
+    if ! grep -q '^TRANSPARENCY_FIX=' "$DEST/config.env"; then
+        cat >> "$DEST/config.env" <<'CFG'
+
+# Bongo Cat's Transparency Fix (the F3 setting). Pressing Stop in Steam counts
+# as a crash, and the game then switches the fix off on its next start.
+#   on   = switch it back on before every start (default, recommended)
+#   keep = only stop the game from resetting it; your own F3 choice stays
+#   off  = leave the game's settings completely alone
+TRANSPARENCY_FIX=on
+CFG
+        ok "added TRANSPARENCY_FIX=on (fixes the black box after the Nov 2026 update)"
     fi
     if ! grep -q '^CLICK_MODE=' "$DEST/config.env"; then
         cat >> "$DEST/config.env" <<'CFG'
