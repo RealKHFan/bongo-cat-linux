@@ -63,9 +63,12 @@
 #define GAP_MS              35   /* gap before the same letter taps again (>2 frames) */
 #define MAX_QUEUED           8   /* per letter, so a key-mash can't run away */
 #define MAX_HIDDEN          16   /* windows we can shield during a click */
+#define MAX_CATS             4   /* colour-keyed Bongo Cat windows we track */
+#define FIX_SCAN_MS        500   /* full window scan; known cat windows: every tick */
 
 static volatile LONG g_last_real_key = 0;    /* GetTickCount() of last real key Wine saw */
 static volatile LONG g_last_real_click = 0;  /* ... and last real mouse click */
+static volatile LONG g_real_downs = 0;       /* real button presses not yet matched to a paw tap */
 static FILE *g_log = NULL;
 static unsigned short g_port = DEFAULT_PORT;
 static BOOL g_force_clickable = FALSE;
@@ -117,6 +120,9 @@ static LRESULT CALLBACK mouse_hook(int code, WPARAM wp, LPARAM lp)
         if (m->dwExtraInfo != BRIDGE_MAGIC && !(m->flags & LLMHF_INJECTED)) {
             LONG now = (LONG)GetTickCount();
             InterlockedExchange(&g_last_real_click, now ? now : 1);
+            if (wp == WM_LBUTTONDOWN || wp == WM_RBUTTONDOWN ||
+                wp == WM_MBUTTONDOWN || wp == WM_XBUTTONDOWN)
+                InterlockedIncrement(&g_real_downs);
         }
     }
     return CallNextHookEx(NULL, code, wp, lp);
@@ -295,7 +301,20 @@ static void handle_byte(unsigned char c)
 
 static int g_fixed_now;
 static HWND g_logged_hwnd;
-static HWND g_cat_hwnd;          /* Bongo Cat's colour-keyed window, once seen */
+
+/* Bongo Cat's colour-keyed windows. Asking Wine about another program's
+   windows costs a round trip to the wine server each time, so only these few
+   are checked every tick; a full scan for new ones runs every FIX_SCAN_MS. */
+static HWND g_cats[MAX_CATS];
+static int g_cat_count;
+
+static void remember_cat(HWND hwnd)
+{
+    int i;
+    for (i = 0; i < g_cat_count; i++)
+        if (g_cats[i] == hwnd) return;
+    if (g_cat_count < MAX_CATS) g_cats[g_cat_count++] = hwnd;
+}
 
 static BOOL CALLBACK fix_window(HWND hwnd, LPARAM unused)
 {
@@ -311,12 +330,13 @@ static BOOL CALLBACK fix_window(HWND hwnd, LPARAM unused)
     if (pid == g_self_pid) return TRUE;
 
     ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-    if (!(ex & WS_EX_LAYERED) || !(ex & WS_EX_TRANSPARENT)) return TRUE;
+    if (!(ex & WS_EX_LAYERED)) return TRUE;
 
     if (!GetLayeredWindowAttributes(hwnd, &key, &alpha, &flags) || !(flags & LWA_COLORKEY))
         return TRUE;   /* only with Transparency Fix on - otherwise the whole window would block clicks */
 
-    g_cat_hwnd = hwnd;
+    remember_cat(hwnd);
+    if (!(ex & WS_EX_TRANSPARENT)) return TRUE;   /* already clickable */
     SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex & ~WS_EX_TRANSPARENT);
     g_fixed_now++;
     if (hwnd != g_logged_hwnd) {
@@ -347,14 +367,31 @@ static void log_screens(void)
     EnumDisplayMonitors(NULL, NULL, log_monitor, (LPARAM)&n);
 }
 
-static void log_cat_window(void)
+/* the cheap per-tick check: one question to Wine per known cat window */
+static void fix_known_cats(void)
 {
-    static RECT last;
+    int i;
+    for (i = 0; i < g_cat_count; i++) {
+        LONG_PTR ex = GetWindowLongPtrW(g_cats[i], GWL_EXSTYLE);
+        if (!ex) {                                 /* window is gone: forget it */
+            g_cats[i--] = g_cats[--g_cat_count];
+            continue;
+        }
+        if (ex & WS_EX_TRANSPARENT) fix_window(g_cats[i], 0);
+    }
+}
+
+static void log_cat_windows(void)
+{
+    static RECT last[MAX_CATS];
     RECT r;
-    if (!g_cat_hwnd || !IsWindow(g_cat_hwnd) || !GetWindowRect(g_cat_hwnd, &r)) return;
-    if (EqualRect(&r, &last)) return;
-    last = r;
-    logmsg("cat window: %ld,%ld  %ldx%ld", r.left, r.top, r.right - r.left, r.bottom - r.top);
+    int i;
+    for (i = 0; i < g_cat_count; i++) {
+        if (!GetWindowRect(g_cats[i], &r) || EqualRect(&r, &last[i])) continue;
+        last[i] = r;
+        logmsg("cat window %d: %ld,%ld  %ldx%ld", i + 1, r.left, r.top,
+               r.right - r.left, r.bottom - r.top);
+    }
 }
 
 /* ---- Worker: runs the tap slots and the click fix in one thread ---- */
@@ -366,6 +403,7 @@ static DWORD WINAPI worker_thread(LPVOID unused)
     LONG last_logged_taps = 0;
     DWORD last_tap_log = GetTickCount();
     DWORD last_geometry = 0;
+    DWORD last_scan = 0;
     (void)unused;
 
     log_screens();
@@ -378,14 +416,19 @@ static DWORD WINAPI worker_thread(LPVOID unused)
 
         /* mouse clicks as paw taps: after the arm delay, drop them if Wine saw
            the click itself (you clicked the cat), otherwise tap a paw */
+        /* each real press Wine saw (you clicked the cat) cancels exactly one
+           paw tap; presses older than MOUSE_GRACE_MS no longer cancel anything,
+           e.g. from a touchpad the Linux side doesn't read */
+        if (g_real_downs > 0 && !recently(&g_last_real_click, MOUSE_GRACE_MS))
+            InterlockedExchange(&g_real_downs, 0);
         if (g_mpaw_pending > 0 && now - g_mpaw_armed >= MOUSE_ARM_MS) {
-            if (recently(&g_last_real_click, MOUSE_GRACE_MS)) {
-                g_mpaw_pending = 0;
+            if (g_real_downs > 0) {
+                InterlockedDecrement(&g_real_downs);
             } else {
                 g_mpaw_right = !g_mpaw_right;
                 queue_tap(&g_keys[(g_mpaw_right ? 'J' : 'F') - 'A']);
-                if (--g_mpaw_pending > 0) g_mpaw_armed = now;
             }
+            if (--g_mpaw_pending > 0) g_mpaw_armed = now;
         }
 
         for (i = 0; i < 26; i++) pump_slot(&g_keys[i], now, i);
@@ -395,11 +438,17 @@ static DWORD WINAPI worker_thread(LPVOID unused)
            click-through whenever it thinks the mouse isn't over the cat, and
            on Wayland it often can't see the mouse. Undoing that within 5 ms
            (instead of 50) keeps the cat clickable almost all of the time.
+           Only the known cat windows are checked per tick (see FIX_SCAN_MS).
            Skipped while a 'real' click is shielded, so it can't undo the
            shield mid-click - same thread, so the two can't overlap. */
         if (g_force_clickable && !g_mouse.down) {
             g_fixed_now = 0;
-            EnumWindows(fix_window, 0);
+            if (now - last_scan >= FIX_SCAN_MS) {
+                last_scan = now;
+                EnumWindows(fix_window, 0);       /* also finds new cat windows */
+            } else {
+                fix_known_cats();
+            }
             fixes += g_fixed_now;
         }
         if (now - fix_log_start >= FIX_LOG_MS) {
@@ -412,7 +461,7 @@ static DWORD WINAPI worker_thread(LPVOID unused)
 
         if (now - last_geometry >= 2000) {
             last_geometry = now;
-            log_cat_window();
+            log_cat_windows();
         }
 
         if (g_taps_done != last_logged_taps && now - last_tap_log > 60000) {
