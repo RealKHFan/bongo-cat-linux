@@ -30,7 +30,7 @@ if [ -f "$DEST/config.env" ]; then
     ok "kept your existing config.env"
     # One-time updates for settings files older than format 3. Done once only,
     # so a choice you make afterwards is never overwritten again.
-    if ! grep -q '^CONFIG_VERSION=[3-9]' "$DEST/config.env"; then
+    if ! grep -qE '^CONFIG_VERSION=([3-9]|[1-9][0-9]+)$' "$DEST/config.env"; then
         # "real" clicks were the default until Nov 2026, but Bongo Cat then also
         # presses its own buttons (opening chests) - switch to paw taps.
         if grep -q '^MOUSE_CLICKS=\(real\|1\)$' "$DEST/config.env"; then

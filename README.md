@@ -268,7 +268,7 @@ The manual equivalent is:
 x86_64-w64-mingw32-gcc -O2 -s -mwindows -o keybridge.exe keybridge.c -lws2_32
 ```
 
-The included binary's SHA-256 is `416d8eb39a06555d2a41c24b8f6eba6eef08845a817eca316003a9c663d91594`. Your own build may differ byte-for-byte if you use a different compiler version.
+The included binary's SHA-256 is `0951574a8324f2ee71a2fe89995147e0c1f7cd63026edf1700f5415837bc9d17`. Your own build may differ byte-for-byte if you use a different compiler version.
 
 ---
 

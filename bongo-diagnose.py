@@ -24,7 +24,10 @@ USER = os.environ.get("USER") or os.path.basename(HOME)
 BRIDGE = os.path.join(HOME, ".local", "share", "bongo-bridge")
 
 KNOWN_BRIDGE_BUILDS = {
-    "416d8eb39a06555d2a41c24b8f6eba6eef08845a817eca316003a9c663d91594": "Nov 2026 (paw-tap clicks, 5 ms click fix)",
+    "0951574a8324f2ee71a2fe89995147e0c1f7cd63026edf1700f5415837bc9d17":
+        "Nov 6 2026 (paw-tap clicks, light 5 ms click fix)",
+    "416d8eb39a06555d2a41c24b8f6eba6eef08845a817eca316003a9c663d91594":
+        "Nov 5 2026 (paw-tap clicks, 5 ms click fix)",
     "2c67979ce20824a415d2ff2cf5d20f5183c0842d6e557b9a51ba5ab83d75c4ef":
         "Oct 2026 (pooled taps, real mouse clicks)",
     "4e2eb1ad3f7e39969f99188720408f7f7e0d6c184c1651ed1e7e2d44dbfb6ca9":
